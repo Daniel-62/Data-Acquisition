@@ -1,0 +1,1 @@
+A python automation that will take the id's from an input file, search them in a website database, acquire further information for the respective ID's, save them in a new output excel, further modify and sort it then save the new file.
