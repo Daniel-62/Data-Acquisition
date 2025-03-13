@@ -1,0 +1,199 @@
+import pandas as pd
+import time
+import subprocess
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.edge.service import Service as EdgeService
+import os
+from tkinter import messagebox as mb
+import openpyxl
+
+
+
+def startup_driver(browser='Edge'):
+    global driver
+    if browser == 'Edge':
+        driver = webdriver.Edge(service=EdgeService())
+    driver.maximize_window()
+    global wait
+    # set wait duration here
+    wait = WebDriverWait(driver, 120, poll_frequency=1.5)
+
+
+def killAllEdge():
+    try:
+        subprocess.call("TASKKILL /f  /IM  MSEDGE.EXE")
+        subprocess.call("TASKKILL /f  /IM  MSEDGEDRIVER.EXE")
+    except:
+        pass
+
+
+global loc
+loc = os.getcwd()
+
+
+def auto():
+    killAllEdge()
+
+    startup_driver(browser='Edge')
+    path = str(loc) + f'\\Input File.xlsx'
+    listDF = pd.read_excel(path)
+    final_tabel = pd.DataFrame()
+    first_item = listDF['Code'].to_list()[0]
+    df_errors = []
+    for id in listDF['Code']:
+        driver.get(
+            f"https://website.com/v_id={id}")
+
+        html = wait.until(EC.visibility_of_element_located(
+            (By.XPATH, "//table[@id='productdata']"))).get_attribute('innerHTML')
+        html = f'<table>{html}</table>'
+        time.sleep(0.5)
+        if id == first_item:
+            table = pd.read_html(html)
+        else:
+            table = pd.read_html(html, header=None)
+        try:
+            table = table[0]
+            table = table.iloc[:, :-5]
+            table = table.drop(table.index[-1])
+            table = table.reset_index(drop=True)
+            final_tabel = pd.concat([final_tabel, table], axis=0)
+        except:
+            df_errors.append(id)
+            pass
+    final_tabel.to_excel('Output.xlsx', index=False)
+    # Delete "more tools" from the marketplace column
+    path = str(loc) + '\\Output.xlsx'
+    wb = openpyxl.load_workbook(path)
+    sheet = wb.active
+    for row in range(1, sheet.max_row + 1):
+        cell_value = sheet.cell(row, 5).value
+        if cell_value:
+            new_value = cell_value.replace("more tools", "")
+            sheet.cell(row, 5).value = new_value
+    driver.quit()
+    sheet_name = wb['Sheet1']
+    sheet_name.title = 'Data'
+    wb.save(path)
+    wb.close()
+    # Append the missing id's from the input file to the output file
+    path1 = str(loc) + f'\\Input File.xlsx'
+    path2 = str(loc) + '\\Output.xlsx'
+    df1 = pd.read_excel(path1)
+    df2 = pd.read_excel(path2)
+    try:
+        values_df1 = df1.iloc[:, 0].unique()
+        values_df2 = df2.iloc[:, 4].to_list()
+        append = [value for value in values_df1 if value not in values_df2]
+    except IndexError:
+        print("No retail values")
+        append = [value for value in values_df1]
+
+    df_append = pd.DataFrame({'#': "Not found", 'M ID': "Not found",
+                             'C Name': "Not found", 'C Id': "Not found", 'M Code': append})
+    with pd.ExcelWriter('Output.xlsx', engine='openpyxl', mode='a') as writer:
+        sheet = 'No Data'
+        df_append.to_excel(writer, sheet_name=sheet, index=False)
+
+    # Copy the data from the second sheet to the first sheet
+    wb = openpyxl.load_workbook('Output.xlsx')
+    sheet1 = wb['Data']
+    sheet2 = wb['No Data']
+
+    copy_data(sheet2, sheet1)
+    wb.save('Output.xlsx')
+    wb.close()
+
+    df1 = pd.read_excel('Input File.xlsx', sheet_name='Sheet1')
+    df2 = pd.read_excel('Output.xlsx', sheet_name='Data')
+
+    # Sort the data similar to the first sheet
+    sort = {value: order for order, value in enumerate(df1['M Code'])}
+    df2['Sorted'] = df2['M Code'].map(sort)
+    df2_sorted = df2.sort_values(by=['Sorted']).drop(columns='Sorted')
+    df2_sorted.to_excel('Output.xlsx', index=False, engine='openpyxl')
+
+    # Delete the last row of the output file if the row is the header
+    wb = openpyxl.load_workbook('Output.xlsx')
+    sheet1 = wb['Sheet1']
+    last_row_values = [cell.value for cell in sheet1[sheet1.max_row]]
+    if "M Code" in last_row_values:
+        sheet1.delete_rows(sheet1.max_row)
+    wb.save('Output.xlsx')
+    wb.close()
+
+    filter_excel("Output.xlsx", "Input File.xlsx", mp_ids)
+
+    pop_up()
+
+def pop_up():
+    mb.showinfo("Success", "CSI Check completed!")
+
+def copy_data(ss, ds):
+    for row in ss.iter_rows(min_row=1, values_only=True):
+        ds.append(row)
+
+def filter_excel(output_file, input_file, mp_ids):
+    # remove the sheets from the excel
+    wb = openpyxl.load_workbook(output_file)
+    for market in mp_ids.keys():
+        if market in wb.sheetnames:
+            sheet = wb[market]
+            wb.remove(sheet)
+    wb.save(output_file)
+
+    # Load data and filter based on dict values from Output File
+    df_sheet1 = pd.read_excel(output_file, sheet_name="Sheet1")
+
+    filtered_data = {}
+    for country, mp_id in mp_ids.items():
+        filtered_df = df_sheet1[df_sheet1['Marketplace ID'].astype(
+            str) == str(mp_id)]
+        # create a list with the data that has priority
+        priority = ("Ares", "Des", "Octo", "Rases", "Avec",)
+        priority_filter = filtered_df['C Name'].isin(priority)
+        filtered_df = filtered_df[priority_filter].drop_duplicates(
+            subset="M Code", keep="first")
+
+        filtered_df = pd.concat([filtered_df, df_sheet1[df_sheet1['M ID'].astype(
+            str) == str(mp_id)].drop_duplicates(subset="M Code", keep="first")]).drop_duplicates(subset="M Code", keep="first")
+        filtered_data[country] = filtered_df
+
+    # Load input file
+    input_df = pd.read_excel(input_file)
+
+    # add the filtered data to the output sheets
+    with pd.ExcelWriter(output_file, mode="a", engine="openpyxl") as writer:
+        for country, df in filtered_data.items():
+            df.to_excel(writer, sheet_name=country, index=False)
+
+            sheet = writer.sheets[country]
+            sheet.cell(row=1, column=5, value="M Code")
+            merged_df = pd.merge(input_df, df, how="left", on="M Code")
+
+            cols = list(merged_df.columns)
+            cols.remove("M Code")
+            cols.insert(4, "M Code")
+            merged_df = merged_df[cols]
+
+            # Write merged data to the sheet
+            for i, row in merged_df.iterrows():
+                for j, value in enumerate(row, start=1):
+                    sheet.cell(row=i+2, column=j, value=value)
+
+
+mp_ids = {
+    "A": 1,
+    "B": 2,
+    "C": 3,
+    "D": 4,
+    "E": 5,
+    "F": 6,
+    "G": 7,
+    "H": 8,
+}
+
+auto()
